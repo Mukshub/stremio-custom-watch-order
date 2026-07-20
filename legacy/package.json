@@ -1,0 +1,11 @@
+{
+  "name": "stremio-custom-order-legacy",
+  "version": "2.0.0",
+  "description": "Legacy v2 (stateless, no live-sync) Node dev server. The deployed addon is ../public/_worker.js — see ./README.md.",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  }
+}

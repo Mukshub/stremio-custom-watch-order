@@ -1,0 +1,11 @@
+# Cloudflare Pages config. Deploy with:  wrangler pages deploy
+# (or connect this repo in the Pages dashboard and set output dir = public)
+name = "stremio-custom-order"
+compatibility_date = "2024-11-01"
+pages_build_output_dir = "public"
+
+# KV store for live-sync orders (keyed by the user's personal id in /u/<id>/...)
+[[kv_namespaces]]
+binding = "ORDERS_KV"
+id = "dcde8f580b4044dfa70f007759e99b9b"
+preview_id = "4931239250504150b5655e570975de0a"

@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Custom Watch Order</title>
+<link rel="icon" type="image/png" href="/logo.png" />
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<style>
+  :root {
+    --bg: #0e0d17; --panel: #1a1826; --panel2: #24212f;
+    --accent: #7b5bf5; --accent2: #a48bff; --text: #eceaf5;
+    --muted: #8f8aa3; --ok: #35c98a; --danger: #f5615c; --line: #2e2b3d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; max-width: 1000px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 22px; font-size: 13px; }
+  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
+  .brand-logo { width: 56px; height: 56px; border-radius: 12px; flex: none; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  .brand .sub { margin: 0; }
+  @media (max-width: 520px) { .brand-logo { width: 44px; height: 44px; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+  input[type=text] { width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 15px; outline: none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  select { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none; cursor: pointer; }
+  select:focus { border-color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; cursor: pointer; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .chip:hover { border-color: var(--accent); }
+  .chip .n { color: var(--muted); font-size: 11px; }
+  .results { margin-top: 10px; display: none; }
+  .result { display: flex; gap: 12px; align-items: center; padding: 8px; border-radius: 8px; cursor: pointer; }
+  .result:hover { background: var(--panel2); }
+  .result img { width: 34px; height: 50px; object-fit: cover; border-radius: 4px; background: var(--panel2); }
+  #editor { display: none; }
+  .editor-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
+  .editor-head img { width: 70px; height: 104px; object-fit: cover; border-radius: 8px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
+  .col h3 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .list { min-height: 60px; background: var(--panel2); border: 1px dashed var(--line); border-radius: 10px; padding: 8px; }
+  .col.watch .list { border-color: var(--accent); }
+  .ep { display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: grab; }
+  .ep:last-child { margin-bottom: 0; }
+  .ep.sortable-ghost { opacity: .4; }
+  .ep .grip { color: var(--muted); font-size: 18px; }
+  .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
+  .ep .meta { min-width: 0; }
+  .ep .se { font-weight: 600; font-size: 13px; }
+  .ep .t { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pos { display: none; background: var(--accent); color: #fff; border-radius: 6px; font-size: 12px; font-weight: 700; padding: 2px 7px; flex: none; }
+  .col.watch .pos { display: inline-block; }
+  .btns { display: flex; gap: 10px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  button { border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .save { background: var(--accent); color: #fff; } .save:hover { background: var(--accent2); }
+  .del { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
+  .ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .status { color: var(--ok); font-size: 13px; }
+  .status.err { color: var(--danger); }
+  #install { border-color: var(--accent); }
+  .url { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .url input { font-family: ui-monospace, monospace; font-size: 12px; min-width: 240px; flex: 1; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .editing { font-size: 12px; color: var(--accent2); margin-left: 6px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); }
+  footer b { color: var(--accent2); }
+  footer a { color: var(--accent2); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  .gh { display: inline-flex; align-items: center; gap: 7px; margin-left: auto; flex: none; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600; text-decoration: none; }
+  .gh:hover { border-color: var(--accent); color: var(--accent2); }
+  .gh svg { flex: none; }
+  @media (max-width: 520px) { .gh span { display: none; } .gh { padding: 8px; } }
+</style>
+</head>
+<body>
+  <header class="brand">
+    <img src="/logo.png" alt="Custom Watch Order logo" class="brand-logo" />
+    <div>
+      <h1>Custom Watch Order</h1>
+      <p class="sub">Give each watch order a name. One show can have several (e.g. a "chaos" order and a "chronological" one). Install the link once — add or rename orders any time and they appear on every device (reopen the show to refresh).</p>
+    </div>
+    <a class="gh" href="https://github.com/mukshub/streamio-custom-watch-order" target="_blank" rel="noopener" title="View source on GitHub">
+      <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path></svg>
+      <span>GitHub</span>
+    </a>
+  </header>
+
+  <div class="panel" id="install">
+    <div class="label">Your install link (stable — install once)</div>
+    <div class="url">
+      <input type="text" id="installUrl" readonly />
+      <button class="save" id="copyBtn">Copy</button>
+      <button class="ghost" id="openBtn">Install in Stremio</button>
+    </div>
+    <div class="hint">Bookmark this page — it remembers you on this device. Anyone with this link can view/edit your orders, so keep it private.</div>
+  </div>
+
+  <div class="panel">
+    <div class="label">Your watch orders</div>
+    <div class="chips" id="chips"><span class="sub">Loading…</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="label">Add a new order — pick a show</div>
+    <input type="text" id="search" placeholder="Search a series, e.g. Breaking Bad…" autocomplete="off" />
+    <div class="results" id="results"></div>
+  </div>
+
+  <div class="panel" id="editor">
+    <div class="editor-head">
+      <img id="edPoster" alt="" />
+      <div style="flex:1">
+        <div class="label">Order name <span class="editing" id="editingTag"></span></div>
+        <input type="text" id="edName" placeholder="e.g. My chaos rewatch" />
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-bottom:12px">
+      <select id="filterCol">
+        <option value="defaultList">Filter: Default</option>
+        <option value="watchList">Filter: Watch order</option>
+      </select>
+      <input type="text" id="epFilter" placeholder="Filter episodes — title word, S02, S02E14, E14…" autocomplete="off" style="flex:1" />
+    </div>
+    <div class="cols">
+      <div class="col watch"><h3>▶ Watch order (top = first)</h3><div class="list" id="watchList"></div></div>
+      <div class="col default"><h3>Default episodes</h3><div class="list" id="defaultList"></div></div>
+    </div>
+    <div class="btns">
+      <button class="save" id="saveBtn">Save order</button>
+      <button class="del" id="delBtn">Delete order</button>
+      <span class="status" id="status"></span>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ---- identity: a stable per-user id kept in the URL + localStorage ----
+let uid;
+const urlMatch = location.pathname.match(/^\/u\/([^/]+)\/configure/);
+if (urlMatch) uid = urlMatch[1];
+else uid = localStorage.getItem("cwo_uid") || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
+localStorage.setItem("cwo_uid", uid);
+if (!urlMatch) history.replaceState(null, "", "/u/" + uid + "/configure");
+const API = "/u/" + uid;
+
+$("installUrl").value = location.origin + "/u/" + uid + "/manifest.json";
+
+let current = null;      // { imdbId, cinemetaName, orderId|null }
+let ordersCache = [];
+
+// ---- helpers ----
+const epKey = (s, e) => s + ":" + e;
+function epCard(ep) {
+  const el = document.createElement("div");
+  el.className = "ep";
+  el.dataset.season = ep.season; el.dataset.episode = ep.episode;
+  const se = "S" + String(ep.season).padStart(2, "0") + "E" + String(ep.episode).padStart(2, "0");
+  el.innerHTML = '<span class="grip">⋮⋮</span><span class="pos"></span>' +
+    (ep.thumbnail ? '<img src="' + ep.thumbnail + '" alt="">' : '<img alt="">') +
+    '<div class="meta"><div class="se">' + se + '</div><div class="t">' + (ep.title || "") + '</div></div>';
+  return el;
+}
+function renumber() { [...$("watchList").children].forEach((el, i) => (el.querySelector(".pos").textContent = "#" + (i + 1))); }
+function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.className = "status" + (err ? " err" : ""); }
+// Filter episode cards in the SELECTED column only by title/season/episode text.
+function applyFilter() {
+  const q = $("epFilter").value.trim().toLowerCase();
+  const colId = $("filterCol").value; // "defaultList" or "watchList"
+  document.querySelectorAll("#editor .ep").forEach((el) => (el.style.display = "")); // reset all
+  if (!q) return;
+  document.querySelectorAll("#" + colId + " .ep").forEach((el) => {
+    el.style.display = el.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+}
+$("epFilter").addEventListener("input", applyFilter);
+$("filterCol").addEventListener("change", applyFilter);
+
+// ---- load saved orders (chips) ----
+async function loadOrders() {
+  const box = $("chips");
+  try {
+    const { orders } = await (await fetch(API + "/api/orders")).json();
+    ordersCache = orders;
+    box.innerHTML = "";
+    if (!orders.length) { box.innerHTML = '<span class="sub">None yet — search below to add one.</span>'; return; }
+    orders.forEach((o) => {
+      const c = document.createElement("div");
+      c.className = "chip";
+      c.innerHTML = "<b>" + o.name + "</b> <span class=\"n\">" + o.cinemetaName + " · " + o.count + " eps</span>";
+      c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
+      box.appendChild(c);
+    });
+  } catch { box.innerHTML = '<span class="sub">Could not load orders.</span>'; }
+}
+
+// ---- search (always starts a NEW order for the chosen show) ----
+let searchTimer = null;
+$("search").addEventListener("input", (e) => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  if (!q) { $("results").style.display = "none"; return; }
+  searchTimer = setTimeout(async () => {
+    const { results } = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+    const box = $("results"); box.innerHTML = ""; box.style.display = "block";
+    results.forEach((m) => {
+      const el = document.createElement("div");
+      el.className = "result";
+      el.innerHTML = (m.poster ? '<img src="' + m.poster + '">' : '<img>') + "<div>" + m.name + "</div>";
+      el.onclick = () => { $("results").style.display = "none"; $("search").value = ""; openEditor(m.imdbId, m.name, null); };
+      box.appendChild(el);
+    });
+  }, 300);
+});
+
+// ---- editor ----
+async function openEditor(imdbId, cinemetaName, orderId) {
+  setStatus("Loading episodes…");
+  const data = await (await fetch("/api/episodes?imdb=" + encodeURIComponent(imdbId))).json();
+  const existing = orderId ? ordersCache.find((o) => o.orderId === orderId) : null;
+  const savedOrder = existing ? existing.order : null;
+  current = { imdbId, cinemetaName: data.name || cinemetaName || imdbId, orderId: orderId || null };
+  setStatus("");
+  $("editor").style.display = "block";
+  $("epFilter").value = ""; // reset filter for the newly opened show
+  $("editingTag").textContent = existing ? "· editing “" + existing.name + "”" : "· new order for " + current.cinemetaName;
+  $("edPoster").src = data.poster || "";
+  $("edName").value = existing ? existing.name : (current.cinemetaName + " — custom order");
+
+  const byKey = {};
+  data.episodes.forEach((ep) => (byKey[epKey(ep.season, ep.episode)] = ep));
+  const watch = $("watchList"), def = $("defaultList");
+  watch.innerHTML = ""; def.innerHTML = "";
+
+  if (savedOrder && savedOrder.length) {
+    const used = new Set();
+    savedOrder.forEach(([s, e]) => { const ep = byKey[epKey(s, e)]; if (ep) { watch.appendChild(epCard(ep)); used.add(epKey(s, e)); } });
+    data.episodes.forEach((ep) => { if (!used.has(epKey(ep.season, ep.episode))) def.appendChild(epCard(ep)); });
+  } else {
+    data.episodes.forEach((ep) => def.appendChild(epCard(ep)));
+  }
+  renumber();
+  $("editor").scrollIntoView({ behavior: "smooth" });
+}
+
+const opts = { group: "eps", animation: 150, ghostClass: "sortable-ghost", onSort: renumber };
+new Sortable($("watchList"), opts);
+new Sortable($("defaultList"), opts);
+
+// ---- save / delete (server-backed; install link stays the same) ----
+$("saveBtn").onclick = async () => {
+  if (!current) return;
+  const order = [...$("watchList").children].map((el) => [Number(el.dataset.season), Number(el.dataset.episode)]);
+  if (!order.length) { setStatus("Drag at least one episode into Watch order.", true); return; }
+  const name = $("edName").value.trim() || current.cinemetaName;
+  const payload = { imdbId: current.imdbId, name, order };
+  if (current.orderId) payload.orderId = current.orderId;
+  const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  if (r.ok) {
+    const { orderId } = await r.json();
+    current.orderId = orderId; // keep editing the same order on subsequent saves
+    $("editingTag").textContent = "· editing “" + name + "”";
+    setStatus("Saved ✓ — live on your installed link now.");
+    loadOrders();
+  } else { setStatus("Save failed.", true); }
+};
+$("delBtn").onclick = async () => {
+  if (!current) return;
+  if (current.orderId) {
+    await fetch(API + "/api/order/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId: current.orderId }) });
+    loadOrders();
+  }
+  $("editor").style.display = "none"; current = null;
+  setStatus("Removed.");
+};
+
+// ---- copy / install ----
+$("copyBtn").onclick = async () => {
+  try { await navigator.clipboard.writeText($("installUrl").value); $("copyBtn").textContent = "Copied!"; setTimeout(() => ($("copyBtn").textContent = "Copy"), 1200); }
+  catch { $("installUrl").select(); document.execCommand("copy"); }
+};
+$("openBtn").onclick = () => { window.location.href = $("installUrl").value.replace(/^https?:\/\//, "stremio://"); };
+
+loadOrders();
+</script>
+
+<footer>Custom Watch Order · crafted by <b>Muks</b> 🎬 · <a href="https://github.com/mukshub/streamio-custom-watch-order" target="_blank" rel="noopener">Source on GitHub</a></footer>
+</body>
+</html>
