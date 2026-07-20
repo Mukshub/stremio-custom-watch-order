@@ -54,11 +54,16 @@ function normalizeOrders(data) {
 function manifest() {
   return {
     id: "org.customwatchorder",
-    version: "3.1.2",
+    version: "3.1.3",
     name: "Custom Watch Order",
     description:
       "Watch a series in whatever episode order you want, instead of just 1, 2, 3. Set up a release order, a chronological one, a skip-the-filler cut, or your own chaos rewatch by dragging episodes into place. Your orders sync across all your devices, and your usual stream addons still play every episode.",
     logo: "https://stremio-custom-order.pages.dev/logo.png",
+    stremioAddonsConfig: {
+      issuer: "https://stremio-addons.net",
+      signature:
+        "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..inkrhrH0IT8ln8qWQO6YTg.5zFEei53Rzch1mc-tLzl3oaA6cqkTIvC6cEPJY5fAP4B99KwT8RMPO2h70QOtriXnBiDv8bi6AyMrJzLY3AoKkMYGv-88WefCbBzbDeCJyhUlKXodELCMTp77es_2_E1.W4PJk7Qs77yuo1g4Bv-dZw",
+    },
     behaviorHints: { configurable: true, configurationRequired: false },
     resources: ["catalog", "meta"],
     types: ["series"],
