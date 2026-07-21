@@ -9,3 +9,9 @@ pages_build_output_dir = "public"
 binding = "ORDERS_KV"
 id = "dcde8f580b4044dfa70f007759e99b9b"
 preview_id = "4931239250504150b5655e570975de0a"
+
+# Analytics Engine — privacy-light usage counting (installs, route hits, saves).
+# Query with the SQL API: SELECT blob1 AS event, count(), uniq(blob2) FROM cwo_events ...
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "cwo_events"

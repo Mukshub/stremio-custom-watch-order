@@ -54,7 +54,7 @@ function normalizeOrders(data) {
 function manifest() {
   return {
     id: "org.customwatchorder",
-    version: "3.1.3",
+    version: "3.2.0",
     name: "Custom Watch Order",
     description:
       "Watch a series in whatever episode order you want, instead of just 1, 2, 3. Set up a release order, a chronological one, a skip-the-filler cut, or your own chaos rewatch by dragging episodes into place. Your orders sync across all your devices, and your usual stream addons still play every episode.",
@@ -121,6 +121,20 @@ async function meta(orders, id) {
   };
 }
 
+// Analytics Engine — privacy-light usage counting. No-op when the binding is
+// absent (local Node dev / `pages dev`), so it can never break a request.
+// index1 = user id (or "anon") so unique-user queries sample per user.
+function track(env, event, userId, mode) {
+  try {
+    if (!env || !env.ANALYTICS) return;
+    env.ANALYTICS.writeDataPoint({
+      blobs: [event, userId || "-", mode || "-"],
+      doubles: [1],
+      indexes: [userId || "anon"],
+    });
+  } catch {}
+}
+
 function json(obj, code = 200) {
   return new Response(JSON.stringify(obj), {
     status: code,
@@ -143,6 +157,7 @@ export default {
     const cm = path.match(/^\/c\/([^/]+)(\/.*)?$/);
     if (um) { userId = um[1]; path = um[2] || "/"; }
     else if (cm) { snapshot = decodeConfig(cm[1]); path = cm[2] || "/"; }
+    const mode = userId ? "u" : snapshot ? "c" : "bare";
 
     const getOrders = async () => {
       if (userId) return normalizeOrders(await env.ORDERS_KV.get(userId, "json"));
@@ -154,6 +169,7 @@ export default {
     try {
       // Configure page (static asset, canonical /configure).
       if (path === "/" || path === "/configure" || path === "/configure/") {
+        track(env, "configure", userId, mode);
         return env.ASSETS.fetch(new Request(new URL("/configure", url.origin), request));
       }
 
@@ -198,6 +214,7 @@ export default {
         const oid = body.orderId || `${body.imdbId}-${Math.random().toString(36).slice(2, 8)}`;
         orders[oid] = { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order };
         await putOrders(orders);
+        track(env, "save", userId, mode);
         return json({ ok: true, orderId: oid });
       }
       if (path === "/api/order/delete" && request.method === "POST") {
@@ -211,18 +228,19 @@ export default {
       }
 
       // Addon routes.
-      if (path === "/manifest.json") return json(manifest());
+      if (path === "/manifest.json") { track(env, "manifest", userId, mode); return json(manifest()); }
       const orders = await getOrders();
 
       const cat = path.match(/^\/catalog\/series\/([^/]+?)(?:\/(.+))?\.json$/);
       if (cat) {
         const extra = {};
         if (cat[2]) cat[2].split("&").forEach((kv) => { const i = kv.indexOf("="); if (i > -1) extra[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
+        track(env, "catalog", userId, mode);
         return json(await catalog(orders, extra));
       }
 
       const met = path.match(/^\/meta\/series\/(.+)\.json$/);
-      if (met) return json(await meta(orders, decodeURIComponent(met[1])));
+      if (met) { track(env, "meta", userId, mode); return json(await meta(orders, decodeURIComponent(met[1]))); }
 
       // Static assets from public/ (logo.png, background.png, etc.).
       if (request.method === "GET" && /\.[a-z0-9]+$/i.test(path)) {
