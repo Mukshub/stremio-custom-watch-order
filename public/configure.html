@@ -48,6 +48,8 @@
   .chip { cursor: grab; }
   .chip:active { cursor: grabbing; }
   .chip.sortable-ghost { opacity: .4; }
+  .chip .rm { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
+  .chip .rm:hover { color: var(--danger); }
   .ep .grip { color: var(--muted); font-size: 18px; }
   .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
   .ep .meta { min-width: 0; }
@@ -110,6 +112,13 @@
     <div class="label">Add a new order — pick a show</div>
     <input type="text" id="search" placeholder="Search a series, e.g. Breaking Bad…" autocomplete="off" />
     <div class="results" id="results"></div>
+  </div>
+
+  <div class="panel">
+    <div class="label">Add a movie — appears as its own card next to your orders</div>
+    <input type="text" id="movieSearch" placeholder="Search a film, e.g. Mask of the Phantasm…" autocomplete="off" />
+    <div class="results" id="movieResults" style="display:none"></div>
+    <div class="hint" id="movieStatus" style="margin-top:8px"></div>
   </div>
 
   <div class="panel" id="editor">
@@ -194,12 +203,22 @@ async function loadOrders() {
       const c = document.createElement("div");
       c.className = "chip";
       c.dataset.orderId = o.orderId;
-      c.innerHTML = "<b>" + o.name + "</b> <span class=\"n\">" + o.cinemetaName + " · " + o.count + " eps</span>";
-      c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
+      if (o.kind === "movie") {
+        c.innerHTML = "<b>🎬 " + o.name + "</b> <span class=\"n\">movie</span> <button class=\"rm\" title=\"Remove\">✕</button>";
+        c.querySelector(".rm").onclick = (e) => { e.stopPropagation(); if (confirm('Remove movie “' + o.name + '”?')) deleteOrder(o.orderId); };
+      } else {
+        c.innerHTML = "<b>" + o.name + "</b> <span class=\"n\">" + o.cinemetaName + " · " + o.count + " eps</span>";
+        c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
+      }
       box.appendChild(c);
     });
     initChipsSortable();
   } catch { box.innerHTML = '<span class="sub">Could not load orders.</span>'; }
+}
+
+async function deleteOrder(orderId) {
+  await fetch(API + "/api/order/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId }) });
+  loadOrders();
 }
 
 // ---- drag chips to set the order they appear in Stremio ----
@@ -235,6 +254,34 @@ $("search").addEventListener("input", (e) => {
     });
   }, 300);
 });
+
+// ---- movie search (adds a movie as its own card, no editor needed) ----
+let movieTimer = null;
+$("movieSearch").addEventListener("input", (e) => {
+  clearTimeout(movieTimer);
+  const q = e.target.value.trim();
+  const box = $("movieResults");
+  if (!q) { box.style.display = "none"; return; }
+  movieTimer = setTimeout(async () => {
+    const { results } = await (await fetch("/api/search?type=movie&q=" + encodeURIComponent(q))).json();
+    box.innerHTML = ""; box.style.display = "block";
+    results.forEach((m) => {
+      const el = document.createElement("div");
+      el.className = "result";
+      el.innerHTML = (m.poster ? '<img src="' + m.poster + '">' : '<img>') + "<div>" + m.name + "</div>";
+      el.onclick = () => addMovie(m);
+      box.appendChild(el);
+    });
+  }, 300);
+});
+async function addMovie(m) {
+  $("movieResults").style.display = "none";
+  $("movieSearch").value = "";
+  $("movieStatus").textContent = "Adding “" + m.name + "”…";
+  const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "movie", imdbId: m.imdbId, name: m.name }) });
+  if (r.ok) { $("movieStatus").textContent = "Added “" + m.name + "” ✓ — it's a card in your row now."; loadOrders(); }
+  else { $("movieStatus").textContent = "Couldn't add that movie."; }
+}
 
 // ---- editor ----
 async function openEditor(imdbId, cinemetaName, orderId) {

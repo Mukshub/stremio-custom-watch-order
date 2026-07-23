@@ -25,3 +25,4 @@ Thumbs.db
 # demo source video + render scratch (keep only the built docs/demo.gif)
 docs/*.mp4
 docs/_*
+brand/_*

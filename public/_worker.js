@@ -2,8 +2,15 @@
 //  Cloudflare Pages worker (advanced mode). Web-APIs only.
 //
 //  Orders are keyed by a unique <orderId>, so ONE show can have MULTIPLE named
-//  orders. Each order = { imdbId, name, order:[[s,e],...] }. The catalog item
-//  id is cwo:<orderId>; video ids stay real (tt..:S:E) so streams resolve.
+//  orders. Each order = { imdbId, name, order:[entry,...] }. The catalog item
+//  id is cwo:<orderId>; video ids stay real so streams resolve.
+//    entry = [s,e]                 -> an episode of the order's show (imdbId)
+//    entry = { k:"m", id, name }   -> a MOVIE (any imdb tt id) dropped into the
+//                                     sequence. Its video id is the bare tt id;
+//                                     Stremio requests streams as type=series
+//                                     with that id, which stream addons resolve
+//                                     the same as type=movie (verified: Torrentio
+//                                     returns identical streams for both).
 //
 //  URL modes:
 //   • /u/<id>/...  LIVE SYNC — orders in KV (env.ORDERS_KV) keyed by user <id>.
@@ -24,15 +31,17 @@ const NO_POS = 1e9;
 const posOf = (o) => (typeof o.pos === "number" ? o.pos : NO_POS);
 const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
-async function getCinemetaSeries(imdbId) {
-  if (cache.has(imdbId)) return cache.get(imdbId);
-  const r = await fetch(`${CINEMETA}/meta/series/${imdbId}.json`);
+async function getCinemeta(type, id) {
+  const key = `${type}:${id}`;
+  if (cache.has(key)) return cache.get(key);
+  const r = await fetch(`${CINEMETA}/meta/${type}/${id}.json`);
   if (!r.ok) throw new Error(`cinemeta ${r.status}`);
   const j = await r.json();
   if (!j || !j.meta) throw new Error("no meta");
-  cache.set(imdbId, j.meta);
+  cache.set(key, j.meta);
   return j.meta;
 }
+const getCinemetaSeries = (imdbId) => getCinemeta("series", imdbId);
 
 function decodeConfig(seg) {
   if (!seg) return {};
@@ -62,7 +71,7 @@ function normalizeOrders(data) {
 function manifest() {
   return {
     id: "org.customwatchorder",
-    version: "3.3.0",
+    version: "3.4.0",
     name: "Custom Watch Order",
     description:
       "Watch a series in whatever episode order you want, instead of just 1, 2, 3. Set up a release order, a chronological one, a skip-the-filler cut, or your own chaos rewatch by dragging episodes into place. Your orders sync across all your devices, and your usual stream addons still play every episode.",
@@ -88,6 +97,13 @@ async function catalog(orders, extra = {}) {
     Object.keys(orders).map(async (oid) => {
       const o = orders[oid];
       try {
+        // Movie card: shows the film's own poster/title, sits in the same row.
+        if (o.kind === "movie") {
+          const mv = await getCinemeta("movie", o.imdbId);
+          const label = o.name || mv.name;
+          if (search && !label.toLowerCase().includes(search)) return null;
+          return { pos: posOf(o), meta: { id: `cwo:${oid}`, type: "series", name: label, poster: mv.poster, posterShape: "poster" } };
+        }
         const cm = await getCinemetaSeries(o.imdbId);
         const label = `${cm.name} · ${o.name}`;
         if (search && !label.toLowerCase().includes(search)) return null;
@@ -108,21 +124,52 @@ async function meta(orders, id) {
   const oid = id.replace(/^cwo:/, "");
   const o = orders[oid];
   if (!o) return { meta: null };
+  // Movie card: a one-item "series" whose single video is the real movie id,
+  // so the user's stream addons resolve it (verified). One extra click to play.
+  if (o.kind === "movie") {
+    const mv = await getCinemeta("movie", o.imdbId);
+    return {
+      meta: {
+        id, type: "series", name: o.name || mv.name,
+        poster: mv.poster, posterShape: mv.posterShape || "poster", background: mv.background,
+        logo: mv.logo, description: mv.description, releaseInfo: mv.releaseInfo || mv.year,
+        genres: mv.genres || mv.genre,
+        videos: [{
+          id: o.imdbId, title: `▶ ${mv.name}`, season: 1, episode: 1, number: 1,
+          released: mv.released, thumbnail: mv.background || mv.poster, overview: mv.description,
+        }],
+      },
+    };
+  }
   const cm = await getCinemetaSeries(o.imdbId);
   const byKey = {};
   for (const v of cm.videos || []) byKey[`${v.season}:${v.episode}`] = v;
-  const videos = (o.order || [])
-    .map(([season, episode], i) => {
+  // Build videos in order. Numbering is by final position (contiguous 1..N),
+  // renumbered into a single fake season so Stremio shows our exact sequence.
+  const videos = [];
+  for (const entry of o.order || []) {
+    const n = videos.length + 1;
+    if (Array.isArray(entry)) {
+      const [season, episode] = entry;
       const src = byKey[`${season}:${episode}`];
-      if (!src) return null;
-      return {
+      if (!src) continue;
+      videos.push({
         id: `${o.imdbId}:${season}:${episode}`,
-        title: `#${i + 1} · S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")} — ${src.name}`,
-        season: 1, episode: i + 1, number: i + 1,
+        title: `#${n} · S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")} — ${src.name}`,
+        season: 1, episode: n, number: n,
         released: src.released, thumbnail: src.thumbnail, overview: src.overview || src.description,
-      };
-    })
-    .filter(Boolean);
+      });
+    } else if (entry && entry.k === "m" && entry.id) {
+      let mv;
+      try { mv = await getCinemeta("movie", entry.id); } catch { continue; }
+      videos.push({
+        id: entry.id, // bare tt id — resolves streams under type=series (see header)
+        title: `#${n} · 🎬 ${mv.name}`,
+        season: 1, episode: n, number: n,
+        released: mv.released, thumbnail: mv.background || mv.poster, overview: mv.description,
+      });
+    }
+  }
   return {
     meta: {
       id, type: "series", name: `${cm.name} — ${o.name || "Custom Order"}`,
@@ -188,8 +235,9 @@ export default {
       // Cinemeta proxies (no id needed).
       if (path === "/api/search") {
         const q = (url.searchParams.get("q") || "").trim();
+        const type = url.searchParams.get("type") === "movie" ? "movie" : "series";
         if (!q) return json({ results: [] });
-        const r = await fetch(`${CINEMETA}/catalog/series/top/search=${encodeURIComponent(q)}.json`);
+        const r = await fetch(`${CINEMETA}/catalog/${type}/top/search=${encodeURIComponent(q)}.json`);
         const jj = await r.json();
         return json({ results: (jj.metas || []).slice(0, 20).map((x) => ({ imdbId: x.id, name: x.name, poster: x.poster })) });
       }
@@ -211,9 +259,10 @@ export default {
         const list = await Promise.all(
           Object.keys(orders).map(async (oid) => {
             const o = orders[oid];
+            const kind = o.kind === "movie" ? "movie" : "series";
             let cinemetaName = o.imdbId, poster = null;
-            try { const c = await getCinemetaSeries(o.imdbId); cinemetaName = c.name; poster = c.poster; } catch {}
-            return { orderId: oid, imdbId: o.imdbId, cinemetaName, poster, name: o.name, order: o.order, count: o.order.length, pos: posOf(o) };
+            try { const c = await getCinemeta(kind, o.imdbId); cinemetaName = c.name; poster = c.poster; } catch {}
+            return { orderId: oid, imdbId: o.imdbId, kind, cinemetaName, poster, name: o.name, order: o.order || [], count: (o.order || []).length, pos: posOf(o) };
           })
         );
         // Same order the catalog uses, so the chips match Stremio.
@@ -223,11 +272,14 @@ export default {
       if (path === "/api/order" && request.method === "POST") {
         if (!userId) return json({ error: "no user id" }, 400);
         const body = await request.json().catch(() => ({}));
-        if (!body.imdbId || !Array.isArray(body.order)) return json({ error: "imdbId and order[] required" }, 400);
+        const isMovie = body.kind === "movie";
+        if (!body.imdbId || (!isMovie && !Array.isArray(body.order))) return json({ error: "imdbId and order[] required" }, 400);
         const orders = await getOrders();
         const oid = body.orderId || `${body.imdbId}-${Math.random().toString(36).slice(2, 8)}`;
         const prev = orders[oid] || {};
-        orders[oid] = { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order };
+        orders[oid] = isMovie
+          ? { kind: "movie", imdbId: body.imdbId, name: body.name || body.imdbId, order: [] }
+          : { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order };
         if (typeof prev.pos === "number") orders[oid].pos = prev.pos; // keep manual position across edits
         await putOrders(orders);
         track(env, "save", userId, mode);
