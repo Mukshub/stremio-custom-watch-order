@@ -45,6 +45,9 @@
   .ep { display: flex; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: grab; }
   .ep:last-child { margin-bottom: 0; }
   .ep.sortable-ghost { opacity: .4; }
+  .chip { cursor: grab; }
+  .chip:active { cursor: grabbing; }
+  .chip.sortable-ghost { opacity: .4; }
   .ep .grip { color: var(--muted); font-size: 18px; }
   .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
   .ep .meta { min-width: 0; }
@@ -99,6 +102,7 @@
 
   <div class="panel">
     <div class="label">Your watch orders</div>
+    <div class="hint" style="margin-bottom:10px">Drag to reorder — this is the order they appear in Stremio. Click one to edit its episodes.</div>
     <div class="chips" id="chips"><span class="sub">Loading…</span></div>
   </div>
 
@@ -189,11 +193,28 @@ async function loadOrders() {
     orders.forEach((o) => {
       const c = document.createElement("div");
       c.className = "chip";
+      c.dataset.orderId = o.orderId;
       c.innerHTML = "<b>" + o.name + "</b> <span class=\"n\">" + o.cinemetaName + " · " + o.count + " eps</span>";
       c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
       box.appendChild(c);
     });
+    initChipsSortable();
   } catch { box.innerHTML = '<span class="sub">Could not load orders.</span>'; }
+}
+
+// ---- drag chips to set the order they appear in Stremio ----
+let chipsSortable = null;
+function initChipsSortable() {
+  if (chipsSortable) return; // container is stable across reloads; init once
+  chipsSortable = new Sortable($("chips"), { animation: 150, ghostClass: "sortable-ghost", onEnd: saveChipOrder });
+}
+async function saveChipOrder() {
+  const orderIds = [...$("chips").children].map((el) => el.dataset.orderId).filter(Boolean);
+  if (!orderIds.length) return;
+  try {
+    await fetch(API + "/api/order/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) });
+    setStatus("Order saved ✓ — reopen the row in Stremio to see it.");
+  } catch { setStatus("Couldn't save the new order.", true); }
 }
 
 // ---- search (always starts a NEW order for the chosen show) ----

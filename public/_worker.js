@@ -9,12 +9,20 @@
 //   • /u/<id>/...  LIVE SYNC — orders in KV (env.ORDERS_KV) keyed by user <id>.
 //   • /c/<config>/... STATELESS snapshot (kept for future "publish" button).
 //
-//  KV value shape: { v:2, orders: { <orderId>: {imdbId,name,order} } }.
+//  KV value shape: { v:2, orders: { <orderId>: {imdbId,name,order,pos?} } }.
 //  Back-compat: v1 { shows: { <imdbId>: {name,order} } } is migrated on read.
+//  `pos` (optional) = manual sort position set by drag-reordering on the
+//  configure page. Orders without it fall back to name sort (see NO_POS).
 // ============================================================================
 
 const CINEMETA = "https://v3-cinemeta.strem.io";
 const cache = new Map();
+
+// Sentinel for orders with no manual position: sort them after positioned
+// ones, then alphabetically. Finite so it's safe in numeric subtraction.
+const NO_POS = 1e9;
+const posOf = (o) => (typeof o.pos === "number" ? o.pos : NO_POS);
+const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 
 async function getCinemetaSeries(imdbId) {
   if (cache.has(imdbId)) return cache.get(imdbId);
@@ -54,7 +62,7 @@ function normalizeOrders(data) {
 function manifest() {
   return {
     id: "org.customwatchorder",
-    version: "3.2.0",
+    version: "3.3.0",
     name: "Custom Watch Order",
     description:
       "Watch a series in whatever episode order you want, instead of just 1, 2, 3. Set up a release order, a chronological one, a skip-the-filler cut, or your own chaos rewatch by dragging episodes into place. Your orders sync across all your devices, and your usual stream addons still play every episode.",
@@ -76,20 +84,24 @@ function manifest() {
 
 async function catalog(orders, extra = {}) {
   const search = extra.search ? extra.search.toLowerCase() : null;
-  const metas = await Promise.all(
+  const entries = await Promise.all(
     Object.keys(orders).map(async (oid) => {
       const o = orders[oid];
       try {
         const cm = await getCinemetaSeries(o.imdbId);
         const label = `${cm.name} · ${o.name}`;
         if (search && !label.toLowerCase().includes(search)) return null;
-        return { id: `cwo:${oid}`, type: "series", name: label, poster: cm.poster, posterShape: "poster" };
+        return { pos: posOf(o), meta: { id: `cwo:${oid}`, type: "series", name: label, poster: cm.poster, posterShape: "poster" } };
       } catch {
         return null;
       }
     })
   );
-  return { metas: metas.filter(Boolean) };
+  const clean = entries.filter(Boolean);
+  // Manual position first; name is the tiebreaker (and the default before any
+  // reorder, since un-positioned orders all share NO_POS).
+  clean.sort((a, b) => a.pos - b.pos || byName(a.meta.name, b.meta.name));
+  return { metas: clean.map((e) => e.meta) };
 }
 
 async function meta(orders, id) {
@@ -201,9 +213,11 @@ export default {
             const o = orders[oid];
             let cinemetaName = o.imdbId, poster = null;
             try { const c = await getCinemetaSeries(o.imdbId); cinemetaName = c.name; poster = c.poster; } catch {}
-            return { orderId: oid, imdbId: o.imdbId, cinemetaName, poster, name: o.name, order: o.order, count: o.order.length };
+            return { orderId: oid, imdbId: o.imdbId, cinemetaName, poster, name: o.name, order: o.order, count: o.order.length, pos: posOf(o) };
           })
         );
+        // Same order the catalog uses, so the chips match Stremio.
+        list.sort((a, b) => a.pos - b.pos || byName(`${a.cinemetaName} · ${a.name}`, `${b.cinemetaName} · ${b.name}`));
         return json({ orders: list });
       }
       if (path === "/api/order" && request.method === "POST") {
@@ -212,10 +226,22 @@ export default {
         if (!body.imdbId || !Array.isArray(body.order)) return json({ error: "imdbId and order[] required" }, 400);
         const orders = await getOrders();
         const oid = body.orderId || `${body.imdbId}-${Math.random().toString(36).slice(2, 8)}`;
+        const prev = orders[oid] || {};
         orders[oid] = { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order };
+        if (typeof prev.pos === "number") orders[oid].pos = prev.pos; // keep manual position across edits
         await putOrders(orders);
         track(env, "save", userId, mode);
         return json({ ok: true, orderId: oid });
+      }
+      if (path === "/api/order/reorder" && request.method === "POST") {
+        if (!userId) return json({ error: "no user id" }, 400);
+        const body = await request.json().catch(() => ({}));
+        if (!Array.isArray(body.orderIds)) return json({ error: "orderIds[] required" }, 400);
+        const orders = await getOrders();
+        // Assign pos by the sequence sent; unknown ids are ignored.
+        body.orderIds.forEach((oid, i) => { if (orders[oid]) orders[oid].pos = i; });
+        await putOrders(orders);
+        return json({ ok: true });
       }
       if (path === "/api/order/delete" && request.method === "POST") {
         if (!userId) return json({ error: "no user id" }, 400);
