@@ -52,7 +52,9 @@
   .chip .rm:hover { color: var(--danger); }
   .ep .grip { color: var(--muted); font-size: 18px; }
   .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
-  .ep .meta { min-width: 0; }
+  .ep .meta { flex: 1; min-width: 0; }
+  .ep .mv { display: none; margin-left: auto; flex: none; background: var(--panel2); border: 1px solid var(--line); color: var(--accent2); border-radius: 8px; width: 38px; height: 38px; font-size: 20px; line-height: 1; align-items: center; justify-content: center; cursor: pointer; }
+  .ep .mv:active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .ep .se { font-weight: 600; font-size: 13px; }
   .ep .t { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pos { display: none; background: var(--accent); color: #fff; border-radius: 6px; font-size: 12px; font-weight: 700; padding: 2px 7px; flex: none; }
@@ -77,6 +79,17 @@
   .gh:hover { border-color: var(--accent); color: var(--accent2); }
   .gh svg { flex: none; }
   @media (max-width: 520px) { .gh span { display: none; } .gh { padding: 8px; } }
+  /* ---- mobile: tap-to-move, no-zoom inputs, stacked install row ---- */
+  @media (max-width: 820px) {
+    body { padding: 16px 14px; }
+    .ep .mv { display: inline-flex; }
+    .col.default .list { border-color: var(--line); }
+    input[type=text], select { font-size: 16px; }  /* >=16px stops iOS zoom-on-focus */
+    .url { flex-direction: column; align-items: stretch; }
+    .url input { min-width: 0; }
+    .url button { width: 100%; }
+    .editor-head img { width: 56px; height: 84px; }
+  }
 </style>
 </head>
 <body>
@@ -173,9 +186,24 @@ function epCard(ep) {
   const se = "S" + String(ep.season).padStart(2, "0") + "E" + String(ep.episode).padStart(2, "0");
   el.innerHTML = '<span class="grip">⋮⋮</span><span class="pos"></span>' +
     (ep.thumbnail ? '<img src="' + ep.thumbnail + '" alt="">' : '<img alt="">') +
-    '<div class="meta"><div class="se">' + se + '</div><div class="t">' + (ep.title || "") + '</div></div>';
+    '<div class="meta"><div class="se">' + se + '</div><div class="t">' + (ep.title || "") + '</div></div>' +
+    '<button class="mv" type="button" aria-label="Move episode"></button>';
+  el.querySelector(".mv").addEventListener("click", onMvClick);
   return el;
 }
+// Tap ＋/− (mobile) to move an episode between the two lists without dragging.
+function onMvClick(e) {
+  e.stopPropagation();
+  const el = e.currentTarget.closest(".ep");
+  const inWatch = el.closest(".list").id === "watchList";
+  $(inWatch ? "defaultList" : "watchList").appendChild(el);
+  afterSort();
+}
+function updateMvButtons() {
+  document.querySelectorAll("#watchList .ep .mv").forEach((b) => { b.textContent = "−"; b.title = "Remove from watch order"; });
+  document.querySelectorAll("#defaultList .ep .mv").forEach((b) => { b.textContent = "+"; b.title = "Add to watch order"; });
+}
+function afterSort() { renumber(); updateMvButtons(); }
 function renumber() { [...$("watchList").children].forEach((el, i) => (el.querySelector(".pos").textContent = "#" + (i + 1))); }
 function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.className = "status" + (err ? " err" : ""); }
 // Filter episode cards in the SELECTED column only by title/season/episode text.
@@ -225,7 +253,8 @@ async function deleteOrder(orderId) {
 let chipsSortable = null;
 function initChipsSortable() {
   if (chipsSortable) return; // container is stable across reloads; init once
-  chipsSortable = new Sortable($("chips"), { animation: 150, ghostClass: "sortable-ghost", onEnd: saveChipOrder });
+  chipsSortable = new Sortable($("chips"), { animation: 150, ghostClass: "sortable-ghost", onEnd: saveChipOrder,
+    delay: 180, delayOnTouchOnly: true, touchStartThreshold: 5, filter: ".rm", preventOnFilter: false });
 }
 async function saveChipOrder() {
   const orderIds = [...$("chips").children].map((el) => el.dataset.orderId).filter(Boolean);
@@ -309,11 +338,15 @@ async function openEditor(imdbId, cinemetaName, orderId) {
   } else {
     data.episodes.forEach((ep) => def.appendChild(epCard(ep)));
   }
-  renumber();
+  afterSort();
   $("editor").scrollIntoView({ behavior: "smooth" });
 }
 
-const opts = { group: "eps", animation: 150, ghostClass: "sortable-ghost", onSort: renumber };
+// delayOnTouchOnly + delay: on a phone a quick swipe scrolls the list; a short
+// press-and-hold starts a drag. Mouse (desktop) is unaffected. filter keeps taps
+// on the ＋/− button from starting a drag while still firing its click.
+const opts = { group: "eps", animation: 150, ghostClass: "sortable-ghost", onSort: afterSort,
+  delay: 180, delayOnTouchOnly: true, touchStartThreshold: 5, filter: ".mv", preventOnFilter: false };
 new Sortable($("watchList"), opts);
 new Sortable($("defaultList"), opts);
 
