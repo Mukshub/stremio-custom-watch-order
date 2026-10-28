@@ -116,7 +116,13 @@
   </div>
 
   <div class="panel">
-    <div class="label">Your watch orders</div>
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px">
+      <div class="label" style="margin:0">Your watch orders</div>
+      <button class="ghost" id="importBtn" style="margin-left:auto; padding:6px 12px; font-size:13px">Import</button>
+      <button class="ghost" id="exportAllBtn" style="padding:6px 12px; font-size:13px">Export all</button>
+      <input type="file" id="importFile" accept=".json,application/json" hidden />
+    </div>
+    <div class="hint" id="importStatus" style="margin:0 0 8px"></div>
     <div class="hint" style="margin-bottom:10px">Drag to reorder — this is the order they appear in Stremio. Click one to edit its episodes.</div>
     <div class="chips" id="chips"><span class="sub">Loading…</span></div>
   </div>
@@ -155,6 +161,7 @@
     </div>
     <div class="btns">
       <button class="save" id="saveBtn">Save order</button>
+      <button class="ghost" id="exportBtn">Export JSON</button>
       <button class="del" id="delBtn">Delete order</button>
       <span class="status" id="status"></span>
     </div>
@@ -179,6 +186,8 @@ let ordersCache = [];
 
 // ---- helpers ----
 const epKey = (s, e) => s + ":" + e;
+// Order names can come from imported files, so escape before putting them in innerHTML.
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 function epCard(ep) {
   const el = document.createElement("div");
   el.className = "ep";
@@ -232,10 +241,10 @@ async function loadOrders() {
       c.className = "chip";
       c.dataset.orderId = o.orderId;
       if (o.kind === "movie") {
-        c.innerHTML = "<b>🎬 " + o.name + "</b> <span class=\"n\">movie</span> <button class=\"rm\" title=\"Remove\">✕</button>";
+        c.innerHTML = "<b>🎬 " + esc(o.name) + "</b> <span class=\"n\">movie</span> <button class=\"rm\" title=\"Remove\">✕</button>";
         c.querySelector(".rm").onclick = (e) => { e.stopPropagation(); if (confirm('Remove movie “' + o.name + '”?')) deleteOrder(o.orderId); };
       } else {
-        c.innerHTML = "<b>" + o.name + "</b> <span class=\"n\">" + o.cinemetaName + " · " + o.count + " eps</span>";
+        c.innerHTML = "<b>" + esc(o.name) + "</b> <span class=\"n\">" + esc(o.cinemetaName) + " · " + o.count + " eps</span>";
         c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
       }
       box.appendChild(c);
@@ -375,6 +384,83 @@ $("delBtn").onclick = async () => {
   }
   $("editor").style.display = "none"; current = null;
   setStatus("Removed.");
+};
+
+// ---- export to .json (client-side download, nothing sent to the server) ----
+function downloadJson(data, name) {
+  const file = (name || "watch-order").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "watch-order";
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = file + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Exports what's on screen in the Watch order column (includes unsaved changes).
+$("exportBtn").onclick = () => {
+  if (!current) return;
+  const cards = [...$("watchList").children];
+  if (!cards.length) { setStatus("Nothing to export — Watch order is empty.", true); return; }
+  const name = $("edName").value.trim() || current.cinemetaName;
+  downloadJson({
+    name, show: current.cinemetaName, imdbId: current.imdbId, exportedAt: new Date().toISOString(),
+    episodes: cards.map((el, i) => {
+      const season = Number(el.dataset.season), episode = Number(el.dataset.episode);
+      return { position: i + 1, season, episode, title: el.querySelector(".t").textContent, id: current.imdbId + ":" + season + ":" + episode };
+    }),
+  }, name);
+  setStatus("Exported ✓");
+};
+$("exportAllBtn").onclick = () => {
+  if (!ordersCache.length) return;
+  downloadJson({
+    exportedAt: new Date().toISOString(),
+    orders: ordersCache.map((o) => o.kind === "movie"
+      ? { kind: "movie", name: o.name, imdbId: o.imdbId }
+      : { kind: "series", name: o.name, show: o.cinemetaName, imdbId: o.imdbId,
+          episodes: (o.order || []).map((x, i) => Array.isArray(x)
+            ? { position: i + 1, season: x[0], episode: x[1] }
+            : { position: i + 1, kind: "movie", imdbId: x.id, name: x.name }) }),
+  }, "custom-watch-orders");
+};
+
+// ---- import a .json made by Export / Export all (always adds NEW orders) ----
+const IMDB = /^tt\d+$/;
+const posInt = (n) => Number.isInteger(n) && n >= 0;
+// Turn one exported order into a save payload, or null if it doesn't look valid.
+function toPayload(o) {
+  if (!o || typeof o !== "object" || !IMDB.test(o.imdbId)) return null;
+  const name = String(o.name || o.show || o.imdbId).slice(0, 120);
+  if (o.kind === "movie") return { kind: "movie", imdbId: o.imdbId, name };
+  const order = (Array.isArray(o.episodes) ? o.episodes : []).map((x) => {
+    if (x && x.kind === "movie") return IMDB.test(x.imdbId) ? { k: "m", id: x.imdbId, name: String(x.name || x.imdbId).slice(0, 120) } : null;
+    const s = Number(x && x.season), e = Number(x && x.episode);
+    return posInt(s) && posInt(e) ? [s, e] : null;
+  }).filter(Boolean);
+  return order.length ? { imdbId: o.imdbId, name, order } : null;
+}
+$("importBtn").onclick = () => $("importFile").click();
+$("importFile").onchange = async (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = ""; // allow re-picking the same file
+  if (!file) return;
+  const st = $("importStatus");
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { st.textContent = "That file isn't valid JSON."; return; }
+  const raw = Array.isArray(data.orders) ? data.orders : [data];
+  const payloads = raw.map(toPayload).filter(Boolean);
+  if (!payloads.length) { st.textContent = "No watch orders found in that file."; return; }
+  const skipped = raw.length - payloads.length;
+  if (!confirm("Add " + payloads.length + " order" + (payloads.length > 1 ? "s" : "") + " from “" + file.name + "”? Your existing orders are kept.")) return;
+  let ok = 0;
+  // One at a time: the server's save is read-modify-write, parallel posts could drop orders.
+  for (const p of payloads) {
+    st.textContent = "Importing " + (ok + 1) + " of " + payloads.length + "…";
+    try { const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); if (r.ok) ok++; } catch {}
+  }
+  const failed = payloads.length - ok;
+  st.textContent = "Imported " + ok + " order" + (ok === 1 ? "" : "s") + " ✓" +
+    (failed ? " · " + failed + " failed" : "") + (skipped ? " · " + skipped + " skipped (invalid)" : "");
+  loadOrders();
 };
 
 // ---- copy / install ----
