@@ -38,6 +38,7 @@
   .editor-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 16px; }
   .editor-head img { width: 70px; height: 104px; object-fit: cover; border-radius: 8px; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .cols > .col { min-width: 0; } /* let long episode titles ellipsis instead of widening the page */
   @media (max-width: 820px) { .cols { grid-template-columns: 1fr; } }
   .col h3 { font-size: 13px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .list { min-height: 60px; background: var(--panel2); border: 1px dashed var(--line); border-radius: 10px; padding: 8px; }
@@ -50,6 +51,18 @@
   .chip.sortable-ghost { opacity: .4; }
   .chip .rm { background: transparent; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
   .chip .rm:hover { color: var(--danger); }
+  .coll { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: rgba(0,0,0,.18); }
+  .coll.sortable-ghost { opacity: .4; }
+  .coll-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .coll-grip { color: var(--muted); font-size: 18px; cursor: grab; padding: 0 4px; touch-action: none; }
+  .coll-head input.coll-name { flex: 1; min-width: 0; font-weight: 600; padding: 6px 10px; background: transparent; border-color: transparent; }
+  .coll-head input.coll-name:hover, .coll-head input.coll-name:focus { border-color: var(--line); background: var(--panel2); }
+  .coll-head .n { color: var(--muted); font-size: 12px; flex: none; }
+  .coll-head .rmcoll { background: transparent; border: none; color: var(--muted); padding: 4px 8px; font-size: 14px; }
+  .coll-head .rmcoll:hover { color: var(--danger); }
+  .coll .chips { min-height: 36px; }
+  .coll .chips:empty::before { content: "Empty — drag orders here"; color: var(--muted); font-size: 12px; padding: 8px 4px; }
+  select.collSel { max-width: 200px; }
   .ep .grip { color: var(--muted); font-size: 18px; }
   .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
   .ep .meta { flex: 1; min-width: 0; }
@@ -117,14 +130,19 @@
 
   <div class="panel">
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px">
-      <div class="label" style="margin:0">Your watch orders</div>
+      <div class="label" style="margin:0">Your collections</div>
       <button class="ghost" id="importBtn" style="margin-left:auto; padding:6px 12px; font-size:13px">Import</button>
       <button class="ghost" id="exportAllBtn" style="padding:6px 12px; font-size:13px">Export all</button>
       <input type="file" id="importFile" accept=".json,application/json" hidden />
     </div>
-    <div class="hint" id="importStatus" style="margin:0 0 8px"></div>
-    <div class="hint" style="margin-bottom:10px">Drag to reorder — this is the order they appear in Stremio. Click one to edit its episodes.</div>
-    <div class="chips" id="chips"><span class="sub">Loading…</span></div>
+    <div class="hint" id="collStatus" style="margin:0 0 8px"></div>
+    <div class="hint" style="margin-bottom:10px">Each collection is its own row in Stremio. Drag orders to reorder them or move them to another collection, and drag ⋮⋮ to reorder the rows. Click an order to edit its episodes.</div>
+    <div id="colls"><span class="sub">Loading…</span></div>
+    <div class="url" style="margin-top:12px">
+      <input type="text" id="newCollName" maxlength="60" placeholder="New collection, e.g. DCAU" autocomplete="off" />
+      <button class="ghost" id="newCollBtn">Add collection</button>
+    </div>
+    <div class="hint" id="rowHint" style="display:none">New, renamed or reordered rows show up once Stremio reloads the addon. Restart Stremio, and if they still don't appear, remove and re-add the addon with your install link (same link, nothing is lost).</div>
   </div>
 
   <div class="panel">
@@ -134,8 +152,11 @@
   </div>
 
   <div class="panel">
-    <div class="label">Add a movie — appears as its own card next to your orders</div>
-    <input type="text" id="movieSearch" placeholder="Search a film, e.g. Mask of the Phantasm…" autocomplete="off" />
+    <div class="label">Add a movie — appears as its own card in a collection</div>
+    <div style="display:flex; gap:8px">
+      <input type="text" id="movieSearch" placeholder="Search a film, e.g. Mask of the Phantasm…" autocomplete="off" style="flex:1" />
+      <select id="movieColl" class="collSel" title="Collection"></select>
+    </div>
     <div class="results" id="movieResults" style="display:none"></div>
     <div class="hint" id="movieStatus" style="margin-top:8px"></div>
   </div>
@@ -145,7 +166,10 @@
       <img id="edPoster" alt="" />
       <div style="flex:1">
         <div class="label">Order name <span class="editing" id="editingTag"></span></div>
-        <input type="text" id="edName" placeholder="e.g. My chaos rewatch" />
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <input type="text" id="edName" placeholder="e.g. My chaos rewatch" style="flex:1; min-width:180px" />
+          <select id="edColl" class="collSel" title="Collection"></select>
+        </div>
       </div>
     </div>
     <div style="display:flex; gap:8px; margin-bottom:12px">
@@ -228,50 +252,129 @@ function applyFilter() {
 $("epFilter").addEventListener("input", applyFilter);
 $("filterCol").addEventListener("change", applyFilter);
 
-// ---- load saved orders (chips) ----
+// ---- load collections + their orders (chips) ----
+let collsCache = [];     // [{ collId, name, catalogId }] in row order
+const post = (p, body) => fetch(API + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const collStatus = (msg) => ($("collStatus").textContent = msg);
+const showRowHint = () => ($("rowHint").style.display = "block");
+const collNameOf = (collId) => (collsCache.find((c) => c.collId === collId) || {}).name || "";
+// Same drag feel as the episode lists (see the note above `opts` below).
+const touchDrag = { delay: 180, delayOnTouchOnly: true, touchStartThreshold: 5 };
+
 async function loadOrders() {
-  const box = $("chips");
+  const box = $("colls");
   try {
-    const { orders } = await (await fetch(API + "/api/orders")).json();
-    ordersCache = orders;
+    const { orders, collections } = await (await fetch(API + "/api/orders")).json();
+    ordersCache = orders; collsCache = collections;
     box.innerHTML = "";
-    if (!orders.length) { box.innerHTML = '<span class="sub">None yet — search below to add one.</span>'; return; }
-    orders.forEach((o) => {
-      const c = document.createElement("div");
-      c.className = "chip";
-      c.dataset.orderId = o.orderId;
-      if (o.kind === "movie") {
-        c.innerHTML = "<b>🎬 " + esc(o.name) + "</b> <span class=\"n\">movie</span> <button class=\"rm\" title=\"Remove\">✕</button>";
-        c.querySelector(".rm").onclick = (e) => { e.stopPropagation(); if (confirm('Remove movie “' + o.name + '”?')) deleteOrder(o.orderId); };
-      } else {
-        c.innerHTML = "<b>" + esc(o.name) + "</b> <span class=\"n\">" + esc(o.cinemetaName) + " · " + o.count + " eps</span>";
-        c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
-      }
-      box.appendChild(c);
-    });
-    initChipsSortable();
+    collections.forEach((col) => box.appendChild(collBlock(col, orders.filter((o) => o.coll === col.collId))));
+    fillCollSelects();
+    initCollsSortable();
   } catch { box.innerHTML = '<span class="sub">Could not load orders.</span>'; }
 }
 
+function chipEl(o) {
+  const c = document.createElement("div");
+  c.className = "chip";
+  c.dataset.orderId = o.orderId;
+  if (o.kind === "movie") {
+    c.innerHTML = "<b>🎬 " + esc(o.name) + "</b> <span class=\"n\">movie</span> <button class=\"rm\" title=\"Remove\">✕</button>";
+    c.querySelector(".rm").onclick = (e) => { e.stopPropagation(); if (confirm('Remove movie “' + o.name + '”?')) deleteOrder(o.orderId); };
+  } else {
+    c.innerHTML = "<b>" + esc(o.name) + "</b> <span class=\"n\">" + esc(o.cinemetaName) + " · " + o.count + " eps</span>";
+    c.onclick = () => openEditor(o.imdbId, o.cinemetaName, o.orderId);
+  }
+  return c;
+}
+
+function collBlock(col, items) {
+  const el = document.createElement("div");
+  el.className = "coll";
+  el.dataset.collId = col.collId;
+  el.innerHTML = '<div class="coll-head"><span class="coll-grip" title="Drag to reorder rows">⋮⋮</span>' +
+    '<input type="text" class="coll-name" maxlength="60" title="Rename collection" />' +
+    '<span class="n"></span><button class="rmcoll" title="Delete collection">✕</button></div><div class="chips"></div>';
+  const name = el.querySelector(".coll-name");
+  name.value = col.name;
+  name.onkeydown = (e) => { if (e.key === "Enter") name.blur(); };
+  name.onchange = () => renameColl(col, name);
+  el.querySelector(".n").textContent = items.length + (items.length === 1 ? " order" : " orders");
+  const rm = el.querySelector(".rmcoll");
+  if (collsCache.length <= 1) rm.style.display = "none"; // always keep at least one row
+  else rm.onclick = () => deleteColl(col, items.length);
+  const chips = el.querySelector(".chips");
+  items.forEach((o) => chips.appendChild(chipEl(o)));
+  // Shared group: an order can be dragged into another collection's block.
+  new Sortable(chips, { group: "orders", animation: 150, ghostClass: "sortable-ghost", onEnd: saveLayout,
+    ...touchDrag, filter: ".rm", preventOnFilter: false });
+  return el;
+}
+
+// Collection <select>s in the editor + movie panel; keeps each one's pick if it still exists.
+function fillCollSelects() {
+  document.querySelectorAll("select.collSel").forEach((sel) => {
+    const keep = sel.value;
+    sel.innerHTML = "";
+    collsCache.forEach((c) => { const op = document.createElement("option"); op.value = c.collId; op.textContent = c.name; sel.appendChild(op); });
+    if (collsCache.some((c) => c.collId === keep)) sel.value = keep;
+  });
+}
+
 async function deleteOrder(orderId) {
-  await fetch(API + "/api/order/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderId }) });
+  await post("/api/order/delete", { orderId });
   loadOrders();
 }
 
-// ---- drag chips to set the order they appear in Stremio ----
-let chipsSortable = null;
-function initChipsSortable() {
-  if (chipsSortable) return; // container is stable across reloads; init once
-  chipsSortable = new Sortable($("chips"), { animation: 150, ghostClass: "sortable-ghost", onEnd: saveChipOrder,
-    delay: 180, delayOnTouchOnly: true, touchStartThreshold: 5, filter: ".rm", preventOnFilter: false });
+// ---- drag: rows (collections) and orders within/between them, saved in one write ----
+let collsSortable = null;
+function initCollsSortable() {
+  if (collsSortable) return; // #colls is stable across reloads; init once
+  collsSortable = new Sortable($("colls"), { animation: 150, ghostClass: "sortable-ghost", handle: ".coll-grip", draggable: ".coll",
+    ...touchDrag, onEnd: (e) => { if (e.oldIndex !== e.newIndex) { showRowHint(); saveLayout(); } } });
 }
-async function saveChipOrder() {
-  const orderIds = [...$("chips").children].map((el) => el.dataset.orderId).filter(Boolean);
-  if (!orderIds.length) return;
+async function saveLayout() {
+  const collections = [...$("colls").querySelectorAll(".coll")].map((c) => ({
+    collId: c.dataset.collId,
+    orderIds: [...c.querySelector(".chips").children].map((el) => el.dataset.orderId).filter(Boolean),
+  }));
   try {
-    await fetch(API + "/api/order/reorder", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orderIds }) });
-    setStatus("Order saved ✓ — reopen the row in Stremio to see it.");
-  } catch { setStatus("Couldn't save the new order.", true); }
+    const r = await post("/api/layout", { collections });
+    collStatus(r.ok ? "Saved ✓ — reopen the row in Stremio to see it." : "Couldn't save that change.");
+  } catch { collStatus("Couldn't save that change."); }
+  loadOrders(); // refresh counts
+}
+
+// ---- create / rename / delete collections ----
+$("newCollBtn").onclick = async () => {
+  const name = $("newCollName").value.trim();
+  if (!name) { $("newCollName").focus(); return; }
+  const r = await post("/api/collection", { name });
+  if (!r.ok) { collStatus("Couldn't add that collection."); return; }
+  $("newCollName").value = "";
+  collStatus("Added “" + name + "” ✓ — drag orders into it.");
+  showRowHint();
+  loadOrders();
+};
+$("newCollName").addEventListener("keydown", (e) => { if (e.key === "Enter") $("newCollBtn").click(); });
+async function renameColl(col, input) {
+  const name = input.value.trim();
+  if (!name || name === col.name) { input.value = col.name; return; }
+  const r = await post("/api/collection", { collId: col.collId, name });
+  if (!r.ok) { input.value = col.name; collStatus("Couldn't rename that collection."); return; }
+  collStatus("Renamed to “" + name + "” ✓");
+  showRowHint();
+  loadOrders();
+}
+async function deleteColl(col, count) {
+  const target = collsCache.find((c) => c.collId !== col.collId);
+  const msg = count
+    ? "Delete collection “" + col.name + "”? Its " + count + " order" + (count === 1 ? "" : "s") + " will move to “" + target.name + "”."
+    : "Delete collection “" + col.name + "”?";
+  if (!confirm(msg)) return;
+  const r = await post("/api/collection/delete", { collId: col.collId, moveTo: target.collId });
+  collStatus(r.ok ? "Deleted “" + col.name + "”." : "Couldn't delete that collection.");
+  if (r.ok) showRowHint();
+  loadOrders();
 }
 
 // ---- search (always starts a NEW order for the chosen show) ----
@@ -316,8 +419,8 @@ async function addMovie(m) {
   $("movieResults").style.display = "none";
   $("movieSearch").value = "";
   $("movieStatus").textContent = "Adding “" + m.name + "”…";
-  const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "movie", imdbId: m.imdbId, name: m.name }) });
-  if (r.ok) { $("movieStatus").textContent = "Added “" + m.name + "” ✓ — it's a card in your row now."; loadOrders(); }
+  const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "movie", imdbId: m.imdbId, name: m.name, coll: $("movieColl").value }) });
+  if (r.ok) { $("movieStatus").textContent = "Added “" + m.name + "” ✓ — it's a card in “" + collNameOf($("movieColl").value) + "” now."; loadOrders(); }
   else { $("movieStatus").textContent = "Couldn't add that movie."; }
 }
 
@@ -334,6 +437,7 @@ async function openEditor(imdbId, cinemetaName, orderId) {
   $("editingTag").textContent = existing ? "· editing “" + existing.name + "”" : "· new order for " + current.cinemetaName;
   $("edPoster").src = data.poster || "";
   $("edName").value = existing ? existing.name : (current.cinemetaName + " — custom order");
+  if (existing) $("edColl").value = existing.coll; // new orders keep the last-picked collection
 
   const byKey = {};
   data.episodes.forEach((ep) => (byKey[epKey(ep.season, ep.episode)] = ep));
@@ -365,7 +469,7 @@ $("saveBtn").onclick = async () => {
   const order = [...$("watchList").children].map((el) => [Number(el.dataset.season), Number(el.dataset.episode)]);
   if (!order.length) { setStatus("Drag at least one episode into Watch order.", true); return; }
   const name = $("edName").value.trim() || current.cinemetaName;
-  const payload = { imdbId: current.imdbId, name, order };
+  const payload = { imdbId: current.imdbId, name, order, coll: $("edColl").value };
   if (current.orderId) payload.orderId = current.orderId;
   const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (r.ok) {
@@ -402,7 +506,7 @@ $("exportBtn").onclick = () => {
   if (!cards.length) { setStatus("Nothing to export — Watch order is empty.", true); return; }
   const name = $("edName").value.trim() || current.cinemetaName;
   downloadJson({
-    name, show: current.cinemetaName, imdbId: current.imdbId, exportedAt: new Date().toISOString(),
+    name, show: current.cinemetaName, imdbId: current.imdbId, collection: collNameOf($("edColl").value), exportedAt: new Date().toISOString(),
     episodes: cards.map((el, i) => {
       const season = Number(el.dataset.season), episode = Number(el.dataset.episode);
       return { position: i + 1, season, episode, title: el.querySelector(".t").textContent, id: current.imdbId + ":" + season + ":" + episode };
@@ -414,9 +518,10 @@ $("exportAllBtn").onclick = () => {
   if (!ordersCache.length) return;
   downloadJson({
     exportedAt: new Date().toISOString(),
+    collections: collsCache.map((c) => c.name), // row order, incl. empty collections
     orders: ordersCache.map((o) => o.kind === "movie"
-      ? { kind: "movie", name: o.name, imdbId: o.imdbId }
-      : { kind: "series", name: o.name, show: o.cinemetaName, imdbId: o.imdbId,
+      ? { kind: "movie", name: o.name, imdbId: o.imdbId, collection: collNameOf(o.coll) }
+      : { kind: "series", name: o.name, show: o.cinemetaName, imdbId: o.imdbId, collection: collNameOf(o.coll),
           episodes: (o.order || []).map((x, i) => Array.isArray(x)
             ? { position: i + 1, season: x[0], episode: x[1] }
             : { position: i + 1, kind: "movie", imdbId: x.id, name: x.name }) }),
@@ -443,23 +548,54 @@ $("importFile").onchange = async (ev) => {
   const file = ev.target.files[0];
   ev.target.value = ""; // allow re-picking the same file
   if (!file) return;
-  const st = $("importStatus");
+  const st = $("collStatus");
   let data;
   try { data = JSON.parse(await file.text()); } catch { st.textContent = "That file isn't valid JSON."; return; }
   const raw = Array.isArray(data.orders) ? data.orders : [data];
-  const payloads = raw.map(toPayload).filter(Boolean);
+  const collLabel = (s) => (typeof s === "string" ? s.trim().slice(0, 60) : "");
+  const payloads = raw.map((o) => { const p = toPayload(o); if (p) p._coll = collLabel(o.collection); return p; }).filter(Boolean);
   if (!payloads.length) { st.textContent = "No watch orders found in that file."; return; }
   const skipped = raw.length - payloads.length;
-  if (!confirm("Add " + payloads.length + " order" + (payloads.length > 1 ? "s" : "") + " from “" + file.name + "”? Your existing orders are kept.")) return;
-  let ok = 0;
+  // Collections named in the file: reuse an existing one with the same name, else create it.
+  const byName = {};
+  collsCache.forEach((c) => (byName[c.name.toLowerCase()] = c.collId));
+  const wanted = [...(Array.isArray(data.collections) ? data.collections.map(collLabel) : []), ...payloads.map((p) => p._coll)].filter(Boolean);
+  const toCreate = [...new Set(wanted.map((n) => n.toLowerCase()))].filter((k) => !byName[k]).map((k) => wanted.find((n) => n.toLowerCase() === k));
+  if (!confirm("Add " + payloads.length + " order" + (payloads.length > 1 ? "s" : "") + " from “" + file.name + "”" +
+    (toCreate.length ? " and " + toCreate.length + " new collection" + (toCreate.length > 1 ? "s" : "") : "") + "? Your existing orders are kept.")) return;
   // One at a time: the server's save is read-modify-write, parallel posts could drop orders.
+  // Fresh user (one empty default row): rename it to the first collection rather than leave it empty.
+  if (toCreate.length && !ordersCache.length && collsCache.length === 1) {
+    const n = toCreate.shift();
+    try { const r = await post("/api/collection", { collId: collsCache[0].collId, name: n }); if (r.ok) byName[n.toLowerCase()] = collsCache[0].collId; } catch {}
+  }
+  for (const n of toCreate) {
+    try { const r = await post("/api/collection", { name: n }); if (r.ok) byName[n.toLowerCase()] = (await r.json()).collId; } catch {}
+  }
+  let ok = 0;
+  const added = []; // orderIds in file order, to keep the file's sequence below
   for (const p of payloads) {
     st.textContent = "Importing " + (ok + 1) + " of " + payloads.length + "…";
-    try { const r = await fetch(API + "/api/order", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) }); if (r.ok) ok++; } catch {}
+    if (p._coll && byName[p._coll.toLowerCase()]) p.coll = byName[p._coll.toLowerCase()];
+    delete p._coll;
+    try { const r = await post("/api/order", p); if (r.ok) { ok++; added.push((await r.json()).orderId); } } catch {}
+  }
+  // New orders have no position yet (would name-sort): append them after each
+  // collection's existing orders, in the file's order, in one layout write.
+  if (added.length) {
+    try {
+      const now = await (await fetch(API + "/api/orders")).json();
+      const isNew = new Set(added);
+      await post("/api/layout", { collections: now.collections.map((c) => {
+        const inColl = (oid) => now.orders.some((o) => o.orderId === oid && o.coll === c.collId);
+        return { collId: c.collId, orderIds: [...now.orders.filter((o) => o.coll === c.collId && !isNew.has(o.orderId)).map((o) => o.orderId), ...added.filter(inColl)] };
+      }) });
+    } catch {}
   }
   const failed = payloads.length - ok;
   st.textContent = "Imported " + ok + " order" + (ok === 1 ? "" : "s") + " ✓" +
     (failed ? " · " + failed + " failed" : "") + (skipped ? " · " + skipped + " skipped (invalid)" : "");
+  if (toCreate.length) showRowHint();
   loadOrders();
 };
 

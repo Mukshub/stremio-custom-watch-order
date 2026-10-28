@@ -27,6 +27,7 @@ while still streaming from whatever stream addons you already have installed.
 
 - 🎬 **Any series** — not a fixed franchise list. Search any show and reorder it.
 - 🔀 **Multiple orders per show** — e.g. a "chronological" and a "chaos" cut of the same series, each named.
+- 🗂️ **Collections** — group orders into named collections (e.g. "DCAU", "Star Wars"). Each collection is its own row on the Stremio home screen, and you drag orders between them.
 - 🔗 **Install once** — your install link never changes. Add or rename orders any time.
 - ☁️ **Synced across devices** — orders live server-side, so they show up everywhere you use the same link.
 - ▶️ **Streams still work** — episodes keep their real IDs, so your existing stream addons resolve them normally.

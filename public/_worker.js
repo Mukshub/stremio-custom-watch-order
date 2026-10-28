@@ -16,10 +16,15 @@
 //   • /u/<id>/...  LIVE SYNC — orders in KV (env.ORDERS_KV) keyed by user <id>.
 //   • /c/<config>/... STATELESS snapshot (kept for future "publish" button).
 //
-//  KV value shape: { v:2, orders: { <orderId>: {imdbId,name,order,pos?} } }.
-//  Back-compat: v1 { shows: { <imdbId>: {name,order} } } is migrated on read.
+//  KV value shape: { v:3, orders: { <orderId>: {imdbId,name,order,coll,pos?} },
+//                         collections: { <collId>: {name,pos} } }.
+//  Each COLLECTION is its own catalog row in Stremio; every order belongs to
+//  exactly one (`coll`). Back-compat: v1 { shows } and v2 (no collections) are
+//  migrated on read into the default collection, whose catalog id stays
+//  "cwo_catalog" so manifests cached before collections existed keep working.
 //  `pos` (optional) = manual sort position set by drag-reordering on the
-//  configure page. Orders without it fall back to name sort (see NO_POS).
+//  configure page (orders: within their collection; collections: row order).
+//  Items without it fall back to name sort (see NO_POS).
 // ============================================================================
 
 const CINEMETA = "https://v3-cinemeta.strem.io";
@@ -68,10 +73,34 @@ function normalizeOrders(data) {
   return {};
 }
 
-function manifest() {
+const DEFAULT_COLL = "main";
+const DEFAULT_COLL_NAME = "Custom Watch Order";
+const MAX_COLLS = 50;
+const catalogIdOf = (collId) => (collId === DEFAULT_COLL ? "cwo_catalog" : `cwo_c_${collId}`);
+const cleanName = (s, max) => String(s || "").trim().slice(0, max);
+// Collections as a list in row order.
+const sortedColls = (collections) =>
+  Object.keys(collections)
+    .map((collId) => ({ collId, ...collections[collId] }))
+    .sort((a, b) => posOf(a) - posOf(b) || byName(a.name, b.name));
+
+// Normalize any stored shape -> { orders, collections }, with at least one
+// collection and every order pointing at a collection that exists.
+function normalizeData(data) {
+  const orders = normalizeOrders(data);
+  const collections =
+    data && data.collections && Object.keys(data.collections).length
+      ? data.collections
+      : { [DEFAULT_COLL]: { name: DEFAULT_COLL_NAME, pos: 0 } };
+  const first = sortedColls(collections)[0].collId;
+  for (const o of Object.values(orders)) if (!collections[o.coll]) o.coll = first;
+  return { orders, collections };
+}
+
+function manifest(collections) {
   return {
     id: "org.customwatchorder",
-    version: "3.4.0",
+    version: "3.5.0",
     name: "Custom Watch Order",
     description:
       "Watch a series in whatever episode order you want, instead of just 1, 2, 3. Set up a release order, a chronological one, a skip-the-filler cut, or your own chaos rewatch by dragging episodes into place. Your orders sync across all your devices, and your usual stream addons still play every episode.",
@@ -85,16 +114,17 @@ function manifest() {
     resources: ["catalog", "meta"],
     types: ["series"],
     idPrefixes: ["cwo:"],
-    catalogs: [
-      { type: "series", id: "cwo_catalog", name: "Custom Watch Order", extra: [{ name: "search", isRequired: false }] },
-    ],
+    // One row per collection, in the user's chosen order.
+    catalogs: sortedColls(collections).map((c) => ({
+      type: "series", id: catalogIdOf(c.collId), name: c.name, extra: [{ name: "search", isRequired: false }],
+    })),
   };
 }
 
-async function catalog(orders, extra = {}) {
+async function catalog(orders, collId, extra = {}) {
   const search = extra.search ? extra.search.toLowerCase() : null;
   const entries = await Promise.all(
-    Object.keys(orders).map(async (oid) => {
+    Object.keys(orders).filter((oid) => orders[oid].coll === collId).map(async (oid) => {
       const o = orders[oid];
       try {
         // Movie card: shows the film's own poster/title, sits in the same row.
@@ -218,12 +248,8 @@ export default {
     else if (cm) { snapshot = decodeConfig(cm[1]); path = cm[2] || "/"; }
     const mode = userId ? "u" : snapshot ? "c" : "bare";
 
-    const getOrders = async () => {
-      if (userId) return normalizeOrders(await env.ORDERS_KV.get(userId, "json"));
-      if (snapshot) return normalizeOrders(snapshot);
-      return {};
-    };
-    const putOrders = async (orders) => env.ORDERS_KV.put(userId, JSON.stringify({ v: 2, orders }));
+    const getData = async () => normalizeData(userId ? await env.ORDERS_KV.get(userId, "json") : snapshot);
+    const putData = async ({ orders, collections }) => env.ORDERS_KV.put(userId, JSON.stringify({ v: 3, orders, collections }));
 
     try {
       // Configure page (static asset, canonical /configure).
@@ -255,33 +281,38 @@ export default {
       // Live-sync write API (needs a user id).
       if (path === "/api/orders") {
         if (!userId) return json({ error: "no user id" }, 400);
-        const orders = await getOrders();
+        const { orders, collections } = await getData();
         const list = await Promise.all(
           Object.keys(orders).map(async (oid) => {
             const o = orders[oid];
             const kind = o.kind === "movie" ? "movie" : "series";
             let cinemetaName = o.imdbId, poster = null;
             try { const c = await getCinemeta(kind, o.imdbId); cinemetaName = c.name; poster = c.poster; } catch {}
-            return { orderId: oid, imdbId: o.imdbId, kind, cinemetaName, poster, name: o.name, order: o.order || [], count: (o.order || []).length, pos: posOf(o) };
+            return { orderId: oid, imdbId: o.imdbId, kind, cinemetaName, poster, name: o.name, order: o.order || [], count: (o.order || []).length, pos: posOf(o), coll: o.coll };
           })
         );
         // Same order the catalog uses, so the chips match Stremio.
         list.sort((a, b) => a.pos - b.pos || byName(`${a.cinemetaName} · ${a.name}`, `${b.cinemetaName} · ${b.name}`));
-        return json({ orders: list });
+        const colls = sortedColls(collections).map((c) => ({ collId: c.collId, name: c.name, catalogId: catalogIdOf(c.collId) }));
+        return json({ orders: list, collections: colls });
       }
       if (path === "/api/order" && request.method === "POST") {
         if (!userId) return json({ error: "no user id" }, 400);
         const body = await request.json().catch(() => ({}));
         const isMovie = body.kind === "movie";
         if (!body.imdbId || (!isMovie && !Array.isArray(body.order))) return json({ error: "imdbId and order[] required" }, 400);
-        const orders = await getOrders();
+        const data = await getData();
+        const { orders, collections } = data;
         const oid = body.orderId || `${body.imdbId}-${Math.random().toString(36).slice(2, 8)}`;
         const prev = orders[oid] || {};
+        // Requested collection, else the one it was already in, else the first row.
+        const coll = collections[body.coll] ? body.coll : collections[prev.coll] ? prev.coll : sortedColls(collections)[0].collId;
         orders[oid] = isMovie
-          ? { kind: "movie", imdbId: body.imdbId, name: body.name || body.imdbId, order: [] }
-          : { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order };
-        if (typeof prev.pos === "number") orders[oid].pos = prev.pos; // keep manual position across edits
-        await putOrders(orders);
+          ? { kind: "movie", imdbId: body.imdbId, name: body.name || body.imdbId, order: [], coll }
+          : { imdbId: body.imdbId, name: body.name || body.imdbId, order: body.order, coll };
+        // Keep manual position across edits, unless it moved to another collection.
+        if (typeof prev.pos === "number" && prev.coll === coll) orders[oid].pos = prev.pos;
+        await putData(data);
         track(env, "save", userId, mode);
         return json({ ok: true, orderId: oid });
       }
@@ -289,32 +320,86 @@ export default {
         if (!userId) return json({ error: "no user id" }, 400);
         const body = await request.json().catch(() => ({}));
         if (!Array.isArray(body.orderIds)) return json({ error: "orderIds[] required" }, 400);
-        const orders = await getOrders();
+        const data = await getData();
         // Assign pos by the sequence sent; unknown ids are ignored.
-        body.orderIds.forEach((oid, i) => { if (orders[oid]) orders[oid].pos = i; });
-        await putOrders(orders);
+        body.orderIds.forEach((oid, i) => { if (data.orders[oid]) data.orders[oid].pos = i; });
+        await putData(data);
         return json({ ok: true });
       }
       if (path === "/api/order/delete" && request.method === "POST") {
         if (!userId) return json({ error: "no user id" }, 400);
         const body = await request.json().catch(() => ({}));
         if (!body.orderId) return json({ error: "orderId required" }, 400);
-        const orders = await getOrders();
-        delete orders[body.orderId];
-        await putOrders(orders);
+        const data = await getData();
+        delete data.orders[body.orderId];
+        await putData(data);
+        return json({ ok: true });
+      }
+      // Create (no collId) or rename a collection.
+      if (path === "/api/collection" && request.method === "POST") {
+        if (!userId) return json({ error: "no user id" }, 400);
+        const body = await request.json().catch(() => ({}));
+        const name = cleanName(body.name, 60);
+        if (!name) return json({ error: "name required" }, 400);
+        const data = await getData();
+        const { collections } = data;
+        let collId = body.collId;
+        if (collId && collections[collId]) collections[collId].name = name;
+        else {
+          if (Object.keys(collections).length >= MAX_COLLS) return json({ error: "too many collections" }, 400);
+          collId = `c${Math.random().toString(36).slice(2, 8)}`;
+          const maxPos = Math.max(-1, ...Object.values(collections).map((c) => (typeof c.pos === "number" ? c.pos : -1)));
+          collections[collId] = { name, pos: maxPos + 1 };
+        }
+        await putData(data);
+        return json({ ok: true, collId });
+      }
+      // Delete a collection; its orders move to `moveTo` (or the first other row).
+      if (path === "/api/collection/delete" && request.method === "POST") {
+        if (!userId) return json({ error: "no user id" }, 400);
+        const body = await request.json().catch(() => ({}));
+        const data = await getData();
+        const { orders, collections } = data;
+        if (!collections[body.collId]) return json({ error: "unknown collection" }, 400);
+        const others = sortedColls(collections).filter((c) => c.collId !== body.collId);
+        if (!others.length) return json({ error: "can't delete the last collection" }, 400);
+        const target = others.some((c) => c.collId === body.moveTo) ? body.moveTo : others[0].collId;
+        for (const o of Object.values(orders)) if (o.coll === body.collId) { o.coll = target; delete o.pos; }
+        delete collections[body.collId];
+        await putData(data);
+        return json({ ok: true, movedTo: target });
+      }
+      // Whole board layout from the configure page in ONE write: row order of
+      // collections + which collection each order is in + order within it.
+      if (path === "/api/layout" && request.method === "POST") {
+        if (!userId) return json({ error: "no user id" }, 400);
+        const body = await request.json().catch(() => ({}));
+        if (!Array.isArray(body.collections)) return json({ error: "collections[] required" }, 400);
+        const data = await getData();
+        const { orders, collections } = data;
+        body.collections.forEach((c, i) => {
+          if (!c || !collections[c.collId]) return; // unknown ids are ignored
+          collections[c.collId].pos = i;
+          (Array.isArray(c.orderIds) ? c.orderIds : []).forEach((oid, j) => {
+            if (orders[oid]) { orders[oid].coll = c.collId; orders[oid].pos = j; }
+          });
+        });
+        await putData(data);
         return json({ ok: true });
       }
 
       // Addon routes.
-      if (path === "/manifest.json") { track(env, "manifest", userId, mode); return json(manifest()); }
-      const orders = await getOrders();
+      const { orders, collections } = await getData();
+      if (path === "/manifest.json") { track(env, "manifest", userId, mode); return json(manifest(collections)); }
 
       const cat = path.match(/^\/catalog\/series\/([^/]+?)(?:\/(.+))?\.json$/);
       if (cat) {
         const extra = {};
         if (cat[2]) cat[2].split("&").forEach((kv) => { const i = kv.indexOf("="); if (i > -1) extra[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
         track(env, "catalog", userId, mode);
-        return json(await catalog(orders, extra));
+        // A stale cached manifest may still ask for a deleted collection: empty row.
+        const coll = sortedColls(collections).find((c) => catalogIdOf(c.collId) === cat[1]);
+        return json(coll ? await catalog(orders, coll.collId, extra) : { metas: [] });
       }
 
       const met = path.match(/^\/meta\/series\/(.+)\.json$/);
