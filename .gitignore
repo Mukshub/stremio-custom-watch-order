@@ -26,3 +26,5 @@ Thumbs.db
 docs/*.mp4
 docs/_*
 brand/_*
+# owner-only tools: Stremio auth key + addon-list backups — NEVER commit
+local/
