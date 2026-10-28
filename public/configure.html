@@ -62,6 +62,11 @@
   .coll-head .rmcoll:hover { color: var(--danger); }
   .coll .chips { min-height: 36px; }
   .coll .chips:empty::before { content: "Empty — drag orders here"; color: var(--muted); font-size: 12px; padding: 8px 4px; }
+  .coll-head .coll-toggle { background: transparent; border: none; color: var(--muted); padding: 4px 6px; font-size: 13px; width: 26px; flex: none; transition: transform .15s; }
+  .coll-head .coll-toggle:hover { color: var(--accent2); }
+  .coll.collapsed .coll-toggle { transform: rotate(-90deg); }
+  .coll.collapsed .chips { display: none; }
+  .coll.collapsed .coll-head { margin-bottom: 0; }
   select.collSel { max-width: 200px; }
   .ep .grip { color: var(--muted); font-size: 18px; }
   .ep img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; background: var(--panel2); flex: none; }
@@ -287,13 +292,22 @@ function chipEl(o) {
   return c;
 }
 
+// Collapsed collections, remembered per device (just a viewing convenience).
+const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem("cwo_collapsed")) || []; } catch { return []; } })());
+const saveCollapsed = () => { try { localStorage.setItem("cwo_collapsed", JSON.stringify([...collapsed])); } catch {} };
+
 function collBlock(col, items) {
   const el = document.createElement("div");
-  el.className = "coll";
+  el.className = "coll" + (collapsed.has(col.collId) ? " collapsed" : "");
   el.dataset.collId = col.collId;
-  el.innerHTML = '<div class="coll-head"><span class="coll-grip" title="Drag to reorder rows">⋮⋮</span>' +
+  el.innerHTML = '<div class="coll-head"><button class="coll-toggle" type="button" title="Collapse / expand">▼</button>' +
+    '<span class="coll-grip" title="Drag to reorder rows">⋮⋮</span>' +
     '<input type="text" class="coll-name" maxlength="60" title="Rename collection" />' +
     '<span class="n"></span><button class="rmcoll" title="Delete collection">✕</button></div><div class="chips"></div>';
+  el.querySelector(".coll-toggle").onclick = () => {
+    if (el.classList.toggle("collapsed")) collapsed.add(col.collId); else collapsed.delete(col.collId);
+    saveCollapsed();
+  };
   const name = el.querySelector(".coll-name");
   name.value = col.name;
   name.onkeydown = (e) => { if (e.key === "Enter") name.blur(); };
